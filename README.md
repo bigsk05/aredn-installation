@@ -28,12 +28,6 @@ scripts/
   publish.sh                      #   publish to GitHub Releases
 ```
 
-## Usage
-
-1. Push this repository (default branch).
-2. Actions → `Build AREDN x86_64 installer ISO` → `Run workflow` (initial manual run).
-3. It then runs daily; artefacts land on the **Releases** page, named `aredn-<version>-x86_64-installer.iso`.
-
 ### Installing on a provider (panel)
 
 1. Download the ISO, attach it to the VM's CD-ROM, and set boot-from-CD (BIOS or UEFI both work; the ISO is hybrid).
