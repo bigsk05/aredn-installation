@@ -1,0 +1,7 @@
+artifacts/
+*.iso
+*.iso.sha256
+installer/.gopath/
+installer/.gocache/
+.DS_Store
+.idea/
