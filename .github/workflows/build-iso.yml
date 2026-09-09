@@ -1,0 +1,101 @@
+# AREDN x86_64 installer ISO — daily automated build (GitHub Actions)
+#
+# Triggers:
+#   - schedule: runs daily at 02:20 UTC (tracks both nightly and the latest stable release)
+#   - workflow_dispatch: manual run, optionally picking sources/force
+#
+# Pipeline:
+#   1) cross-compile the static Go installer (aredn-installer; interactive disk picker + double confirmation + dd)
+#   2) discover the latest release (directory crawl) and nightly (profiles.json), download and sha256-verify firmware
+#   3) build a BIOS+UEFI hybrid bootable ISO with Alpine mkimage, baking firmware + installer into the ISO
+#   4) publish to GitHub Releases, skipping versions that were already built
+
+name: Build AREDN x86_64 installer ISO
+
+on:
+  schedule:
+    - cron: '20 2 * * *'   # daily at 02:20 UTC
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: 'Sources to build'
+        type: choice
+        default: both
+        options: [both, release, nightly]
+      force:
+        description: 'Ignore already-built check and force a rebuild'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aredn-iso-builder
+  cancel-in-progress: false
+
+env:
+  ALPINE_TAG: '3.20'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: installer/go.sum
+
+      - name: Build static installer (Go)
+        run: |
+          cd installer
+          go mod download
+          CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o ../artifacts/bin/aredn-installer .
+
+      - name: Fetch latest release firmware
+        run: bash scripts/fetch-aredn.sh release artifacts/release artifacts/bin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+
+      - name: Fetch latest nightly firmware
+        run: bash scripts/fetch-aredn.sh nightly artifacts/nightly artifacts/bin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ github.event.inputs.force || 'false' }}
+
+      - name: Build ISO (release)
+        # no inputs on schedule runs -> treat as both
+        if: ${{ (github.event_name == 'schedule' || github.event.inputs.sources == '' || github.event.inputs.sources == 'both' || github.event.inputs.sources == 'release') && always() }}
+        run: |
+          if [ -f artifacts/release/VERSION ]; then
+            docker run --rm -v "$PWD":/work -w /work alpine:${{ env.ALPINE_TAG }} sh scripts/build.sh release
+          else
+            echo "no new release, skipping"
+          fi
+
+      - name: Build ISO (nightly)
+        if: ${{ (github.event_name == 'schedule' || github.event.inputs.sources == '' || github.event.inputs.sources == 'both' || github.event.inputs.sources == 'nightly') && always() }}
+        run: |
+          if [ -f artifacts/nightly/VERSION ]; then
+            docker run --rm -v "$PWD":/work -w /work alpine:${{ env.ALPINE_TAG }} sh scripts/build.sh nightly
+          else
+            echo "no new nightly, skipping"
+          fi
+
+      - name: Publish to GitHub Releases
+        run: bash scripts/publish.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload ISO artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: aredn-installer-isos
+          path: artifacts/**/*.iso*
+          if-no-files-found: ignore
